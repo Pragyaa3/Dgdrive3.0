@@ -97,15 +97,5 @@ These steps will ensure smooth navigation and utilization of the system while ma
 - The project now stores IPFS URIs as `ipfs://<hash>` on-chain. The front-end uploads files to Pinata and writes `ipfs://<hash>` to the smart contract, and the UI resolves that to `https://gateway.pinata.cloud/ipfs/<hash>`.
 - Browser-based Pinata API keys are visible to users — for production, consider adding a backend proxy or signed uploads to avoid exposing your secrets.
 
-Suggested features to make this project stronger for a major project:
 
-- User auth and profile pages (link ENS / wallet address to a user page).
-- Replace direct Pinata API key usage in the browser with a small backend (Node/Express) that signs upload requests or proxies the upload.
-- Pagination and lazy-loading for image lists.
-- Thumbnails + image optimization before upload.
-- Ability to revoke access on-chain and a UI to show sharing relationships.
-- Add unit tests for the smart contract and integration tests for the front-end flows.
-- Add transaction status indicators and error handling (pending / success / failure) in the UI.
-
-If you want, I can add README sections with deploy-to-testnet steps (Infura/Alchemy + private key configuration) and help implement a minimal backend to secure Pinata uploads.
 
