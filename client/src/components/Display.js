@@ -14,30 +14,33 @@ const Display = ({ contract, account }) => {
       }
     } catch (e) {
       alert("You don't have access");
+      return;
     }
-    const isEmpty = Object.keys(dataArray).length === 0;
 
-    if (!isEmpty) {
-      const str = dataArray.toString();
-      const str_array = str.split(",");
-      // console.log(str);
-      // console.log(str_array);
-      const images = str_array.map((item, i) => {
-        return (
-          <a href={item} key={i} target="_blank">
-            <img
-              key={i}
-              src={`https://gateway.pinata.cloud/ipfs/${item.substring(6)}`}
-              alt="new"
-              className="image-list"
-            ></img>
-          </a>
-        );
-      });
-      setData(images);
-    } else {
+    if (!dataArray || dataArray.length === 0) {
       alert("No image to display");
+      return;
     }
+
+    // Convert returned array to strings and build image elements
+    const str = dataArray.toString();
+    const str_array = str.split(",");
+    const images = str_array.map((item, i) => {
+      // Normalize storage: strip leading ipfs:// if present
+      const hash = item.replace(/^ipfs:\/\//, "");
+      const url = `https://gateway.pinata.cloud/ipfs/${hash}`;
+      return (
+        <a href={url} key={i} target="_blank" rel="noreferrer">
+          <img
+            key={i}
+            src={url}
+            alt={`img-${i}`}
+            className="image-list"
+          ></img>
+        </a>
+      );
+    });
+    setData(images);
   };
   return (
     <>

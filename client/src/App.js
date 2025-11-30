@@ -17,18 +17,30 @@ function App() {
 
     const loadProvider = async () => {
       if (provider) {
-        window.ethereum.on("chainChanged", () => {
-          window.location.reload();
-        });
+        const handleChainChanged = () => {
+          console.log("Chain changed - updating provider");
+          // Instead of reloading, update provider state
+          setProvider(new ethers.providers.Web3Provider(window.ethereum));
+        };
 
-        window.ethereum.on("accountsChanged", () => {
-          window.location.reload();
-        });
+        const handleAccountsChanged = async (accounts) => {
+          console.log("Account changed - updating account");
+          if (accounts.length > 0) {
+            setAccount(accounts[0]);
+          } else {
+            setAccount("");
+            setContract(null);
+          }
+        };
+
+        window.ethereum.on("chainChanged", handleChainChanged);
+        window.ethereum.on("accountsChanged", handleAccountsChanged);
+
         await provider.send("eth_requestAccounts", []);
         const signer = provider.getSigner();
         const address = await signer.getAddress();
         setAccount(address);
-        let contractAddress = "Your Contract Address Here";
+        const contractAddress = process.env.REACT_APP_CONTRACT_ADDRESS || "Your Contract Address Here";
 
         const contract = new ethers.Contract(
           contractAddress,
@@ -38,11 +50,21 @@ function App() {
         //console.log(contract);
         setContract(contract);
         setProvider(provider);
+
+        // Cleanup function to remove listeners
+        return () => {
+          window.ethereum.removeListener("chainChanged", handleChainChanged);
+          window.ethereum.removeListener("accountsChanged", handleAccountsChanged);
+        };
       } else {
         console.error("Metamask is not installed");
       }
     };
-    provider && loadProvider();
+    
+    const cleanup = provider && loadProvider();
+    return () => {
+      if (cleanup) cleanup();
+    };
   }, []);
   return (
     <>

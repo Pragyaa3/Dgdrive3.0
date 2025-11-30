@@ -64,7 +64,15 @@ Here is the video in Hindi - [Decentralize Google Drive](https://youtu.be/fghqq3
 1. Set up environment variables:
 
    - Obtain API keys for Pinata to interact with IPFS.
-   - Update the React component (FileUpload.js) with your Pinata API keys.
+   - Create a `.env` file inside the `client/` folder with the following keys:
+
+```
+REACT_APP_PINATA_API_KEY=your_pinata_api_key_here
+REACT_APP_PINATA_SECRET=your_pinata_secret_here
+REACT_APP_CONTRACT_ADDRESS=0xYourDeployedContractAddressHere
+```
+
+   - The front-end reads these variables at build/dev time. Do NOT commit `client/.env`.
      
 ### Usage
 
@@ -83,4 +91,21 @@ Once the setup and configuration are complete, follow these steps to utilize the
    - Use the "Get Data" button to access other users' images. Input the user's address in the designated box, but remember, you can only access their images if they've granted you access through the smart contract. Otherwise, it will throw an error saying "You don't have access".
 
 These steps will ensure smooth navigation and utilization of the system while maintaining access control and avoiding potential errors.
+
+### Notes, fixes and suggested improvements
+
+- The project now stores IPFS URIs as `ipfs://<hash>` on-chain. The front-end uploads files to Pinata and writes `ipfs://<hash>` to the smart contract, and the UI resolves that to `https://gateway.pinata.cloud/ipfs/<hash>`.
+- Browser-based Pinata API keys are visible to users — for production, consider adding a backend proxy or signed uploads to avoid exposing your secrets.
+
+Suggested features to make this project stronger for a major project:
+
+- User auth and profile pages (link ENS / wallet address to a user page).
+- Replace direct Pinata API key usage in the browser with a small backend (Node/Express) that signs upload requests or proxies the upload.
+- Pagination and lazy-loading for image lists.
+- Thumbnails + image optimization before upload.
+- Ability to revoke access on-chain and a UI to show sharing relationships.
+- Add unit tests for the smart contract and integration tests for the front-end flows.
+- Add transaction status indicators and error handling (pending / success / failure) in the UI.
+
+If you want, I can add README sections with deploy-to-testnet steps (Infura/Alchemy + private key configuration) and help implement a minimal backend to secure Pinata uploads.
 
