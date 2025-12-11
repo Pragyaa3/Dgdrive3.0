@@ -16,37 +16,49 @@ function App() {
   const [uploading, setUploading] = useState(false);
   const [accessList, setAccessList] = useState([]);
 
-  const connectWallet = async () => {
-    if (!window.ethereum) {
-      alert("Please install MetaMask!");
+ const connectMetaMask = async () => {
+  // Ensure MetaMask exists
+  if (!window.ethereum || !window.ethereum.isMetaMask) {
+    alert("MetaMask is not installed. Please install it to continue.");
+    return;
+  }
+
+  try {
+    // Create provider strictly from MetaMask
+    const provider = new ethers.providers.Web3Provider(window.ethereum);
+
+    // Request wallet connection
+    await provider.send("eth_requestAccounts", []);
+
+    // Get signer + address
+    const signer = provider.getSigner();
+    const address = await signer.getAddress();
+
+    // Ensure contract address exists
+    const contractAddress = process.env.REACT_APP_CONTRACT_ADDRESS;
+    if (!contractAddress) {
+      alert("Contract address not configured!");
       return;
     }
 
-    try {
-      const provider = new ethers.providers.Web3Provider(window.ethereum);
-      await provider.send("eth_requestAccounts", []);
-      const signer = provider.getSigner();
-      const address = await signer.getAddress();
-      
-      const contractAddress = process.env.REACT_APP_CONTRACT_ADDRESS;
-      if (!contractAddress) {
-        alert("Contract address not configured!");
-        return;
-      }
+    // Connect to your smart contract
+    const contract = new ethers.Contract(contractAddress, Upload.abi, signer);
 
-      const contract = new ethers.Contract(contractAddress, Upload.abi, signer);
-      
-      setAccount(address);
-      setProvider(provider);
-      setContract(contract);
-      setCurrentView("dashboard");
-      
-      loadFiles(contract, address);
-    } catch (error) {
-      console.error("Connection error:", error);
-      alert("Failed to connect wallet");
-    }
-  };
+    // Update state
+    setAccount(address);
+    setProvider(provider);
+    setContract(contract);
+    setCurrentView("dashboard");
+
+    // Load user files
+    loadFiles(contract, address);
+
+  } catch (error) {
+    console.error("Connection error:", error);
+    alert("Failed to connect wallet");
+  }
+};
+
 
   const loadFiles = async (contractInstance, userAddress) => {
     try {
@@ -159,7 +171,7 @@ function App() {
               <div className="logo-icon">🔐</div>
               <span className="logo-text">DgDrive3.0</span>
             </div>
-            <button onClick={connectWallet} className="connect-btn">
+            <button onClick={connectMetaMask} className="connect-btn">
               Connect Wallet
             </button>
           </div>
@@ -178,7 +190,7 @@ function App() {
               Decentralized, secure, and censorship-resistant storage for the modern web.
             </p>
             <div className="hero-buttons">
-              <button onClick={connectWallet} className="primary-btn">
+              <button onClick={connectMetaMask} className="primary-btn">
                 Get Started Free →
               </button>
               <button className="secondary-btn">
@@ -294,7 +306,10 @@ function App() {
           <div className="cta-content">
             <h2 className="cta-title">Ready to Take Control of Your Data?</h2>
             <p className="cta-desc">Join thousands of users who trust DecentraVault for secure, decentralized storage.</p>
-            <button onClick={connectWallet} className="cta-btn">
+            <button onClick={
+              
+              
+              connectMetaMask} className="cta-btn">
               Start Storing Now →
             </button>
           </div>
@@ -344,7 +359,7 @@ function App() {
       <div className="top-bar">
         <div className="top-bar-left">
           <div className="logo-icon">🔐</div>
-          <span className="logo-text">DecentraVault</span>
+          <span className="logo-text">DgDrive3.0  </span>
         </div>
         <div className="top-bar-right">
           <div className="account-badge">
