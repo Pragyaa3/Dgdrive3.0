@@ -92,13 +92,4 @@ Once the setup and configuration are complete, follow these steps to utilize the
 
 These steps will ensure smooth navigation and utilization of the system while maintaining access control and avoiding potential errors.
 
-<<<<<<< HEAD
-=======
-### Notes, fixes and suggested improvements
-
-- The project now stores IPFS URIs as `ipfs://<hash>` on-chain. The front-end uploads files to Pinata and writes `ipfs://<hash>` to the smart contract, and the UI resolves that to `https://gateway.pinata.cloud/ipfs/<hash>`.
-- Browser-based Pinata API keys are visible to users — for production, consider adding a backend proxy or signed uploads to avoid exposing your secrets.
-
-
->>>>>>> 2d83c9c95dfe1dd75e5203659b578cce1909ef81
 
