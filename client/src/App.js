@@ -618,7 +618,11 @@ function App() {
         );
         await tx.wait();
 
-        const shareUrl = `${window.location.origin}/share/${linkId}`;
+        // Use the current hostname (will be IP address if accessed via IP)
+        const baseUrl = window.location.hostname === 'localhost'
+          ? `http://${window.location.hostname}:3000`
+          : `${window.location.protocol}//${window.location.host}`;
+        const shareUrl = `${baseUrl}/share/${linkId}`;
         setQrShareLink(shareUrl);
         setShareAccessMode("link");
         alert("QR code link created! Recipients will need to enter the password you just set.");
