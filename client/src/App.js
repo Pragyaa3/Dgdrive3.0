@@ -2,6 +2,7 @@ import Upload from "./artifacts/contracts/Upload.sol/Upload.json";
 import { useState, useEffect } from "react";
 import { ethers } from "ethers";
 import axios from "axios";
+import { QRCodeSVG } from 'qrcode.react';
 import "./App.css";
 
 function App() {
@@ -20,6 +21,19 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [filterType, setFilterType] = useState("all");
   const [encryptionPassword, setEncryptionPassword] = useState("");
+  const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [shareLinkPassword, setShareLinkPassword] = useState("");
+  const [shareLinkHours, setShareLinkHours] = useState(24);
+  const [sharePermission, setSharePermission] = useState(1); // 0=NONE, 1=VIEW, 2=DOWNLOAD, 3=EDIT
+  const [generatedShareLink, setGeneratedShareLink] = useState("");
+  const [qrModalOpen, setQrModalOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState(false);
+  const [qrShareLink, setQrShareLink] = useState("");
+  const [shareAccessMode, setShareAccessMode] = useState("direct"); // "direct" or "link"
+  const [shareLinkData, setShareLinkData] = useState(null);
+  const [sharePasswordInput, setSharePasswordInput] = useState("");
+  const [accessingShare, setAccessingShare] = useState(false);
 
  const connectMetaMask = async () => {
   // Ensure MetaMask exists
@@ -136,7 +150,7 @@ function App() {
     return new Blob([combined], { type: file.type });
   };
 
-  const decryptFile = async (encryptedBlob, password, fileName) => {
+  const decryptFile = async (encryptedBlob, password, fileName, fileType) => {
     try {
       const arrayBuffer = await encryptedBlob.arrayBuffer();
       const data = new Uint8Array(arrayBuffer);
@@ -167,7 +181,8 @@ function App() {
         encryptedData
       );
 
-      return new Blob([decrypted]);
+      // Return blob with proper MIME type
+      return new Blob([decrypted], { type: fileType || 'application/octet-stream' });
     } catch (error) {
       console.error("Decryption error:", error);
       throw new Error("Incorrect password or corrupted file");
@@ -187,8 +202,8 @@ function App() {
       const response = await fetch(file.url);
       const encryptedBlob = await response.blob();
 
-      // Decrypt the file
-      const decryptedBlob = await decryptFile(encryptedBlob, password, file.name);
+      // Decrypt the file with proper MIME type
+      const decryptedBlob = await decryptFile(encryptedBlob, password, file.name, file.type);
 
       // Create a download URL for the decrypted file
       const url = URL.createObjectURL(decryptedBlob);
@@ -206,8 +221,8 @@ function App() {
         document.body.removeChild(a);
       }
 
-      // Clean up the URL after a short delay
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      // Clean up the URL after a delay (increased to 5 seconds for viewing)
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
 
       alert(`✅ File decrypted successfully!`);
     } catch (error) {
@@ -423,6 +438,201 @@ function App() {
     }
   }, [contract, modalOpen]);
 
+  // Dark mode effect
+  useEffect(() => {
+    if (darkMode) {
+      document.body.classList.add('dark-mode');
+    } else {
+      document.body.classList.remove('dark-mode');
+    }
+  }, [darkMode]);
+
+  const toggleTheme = () => {
+    setDarkMode(!darkMode);
+  };
+
+  // Check if URL contains a share link on mount
+  useEffect(() => {
+    const checkShareLink = async () => {
+      const path = window.location.pathname;
+      const match = path.match(/^\/share\/(.+)$/);
+
+      if (match) {
+        const linkId = match[1];
+        setCurrentView("shareAccess");
+
+        // Connect to contract without MetaMask (read-only)
+        try {
+          const provider = new ethers.providers.JsonRpcProvider("https://rpc.sepolia.org");
+          const contractAddress = process.env.REACT_APP_CONTRACT_ADDRESS;
+          const contract = new ethers.Contract(contractAddress, Upload.abi, provider);
+
+          // Get share link data
+          const linkData = await contract.getShareableLink(linkId);
+          setShareLinkData({
+            linkId,
+            ipfsHash: linkData.ipfsHash,
+            password: linkData.password,
+            expirationTime: Number(linkData.expirationTime),
+            isActive: linkData.isActive,
+            owner: linkData.owner,
+            permission: Number(linkData.permission)
+          });
+        } catch (error) {
+          console.error("Error loading share link:", error);
+          alert("Failed to load share link. It may have expired or been revoked.");
+        }
+      }
+    };
+
+    checkShareLink();
+  }, []);
+
+  // Handle share link access
+  const handleShareLinkAccess = async () => {
+    if (!shareLinkData) return;
+
+    // Check if link is still active
+    if (!shareLinkData.isActive) {
+      alert("This share link has been revoked by the owner.");
+      return;
+    }
+
+    // Check if link has expired
+    const now = Math.floor(Date.now() / 1000);
+    if (now > shareLinkData.expirationTime) {
+      alert("This share link has expired.");
+      return;
+    }
+
+    // Check password if set
+    if (shareLinkData.password && shareLinkData.password !== "") {
+      if (sharePasswordInput !== shareLinkData.password) {
+        alert("Incorrect password. Please try again.");
+        return;
+      }
+    }
+
+    setAccessingShare(true);
+
+    try {
+      // Fetch the file from IPFS
+      const ipfsUrl = `https://gateway.pinata.cloud/ipfs/${shareLinkData.ipfsHash.replace(/^ipfs:\/\//, "")}`;
+      const response = await fetch(ipfsUrl);
+      const blob = await response.blob();
+
+      // Get filename from share link or use default
+      const filename = `shared-file-${shareLinkData.linkId.slice(0, 8)}`;
+
+      // Create download
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+
+      alert("✅ File downloaded successfully!");
+    } catch (error) {
+      console.error("Download error:", error);
+      alert("Failed to download file: " + error.message);
+    } finally {
+      setAccessingShare(false);
+    }
+  };
+
+  // Delete file function
+  const handleDeleteFile = async (fileIndex) => {
+    if (!window.confirm("Are you sure you want to delete this file? This action cannot be undone.")) {
+      return;
+    }
+
+    try {
+      const signer = contract.connect(provider.getSigner());
+      const tx = await signer.deleteFile(fileIndex);
+      await tx.wait();
+      alert("File deleted successfully!");
+      loadFiles(contract, account);
+    } catch (error) {
+      console.error("Delete error:", error);
+      alert("Failed to delete file: " + (error.message || "Unknown error"));
+    }
+  };
+
+  // Create shareable link
+  const handleCreateShareLink = async () => {
+    if (!selectedFile) return;
+
+    try {
+      const linkId = `${account}-${selectedFile.id}-${Date.now()}`;
+      const signer = contract.connect(provider.getSigner());
+
+      const tx = await signer.createShareableLink(
+        selectedFile.id,
+        linkId,
+        shareLinkPassword || "",
+        shareLinkHours,
+        sharePermission
+      );
+      await tx.wait();
+
+      const shareUrl = `${window.location.origin}/share/${linkId}`;
+      setGeneratedShareLink(shareUrl);
+      alert("Shareable link created successfully!");
+    } catch (error) {
+      console.error("Create share link error:", error);
+      alert("Failed to create shareable link: " + (error.message || "Unknown error"));
+    }
+  };
+
+  // Copy link to clipboard
+  const copyToClipboard = (text) => {
+    navigator.clipboard.writeText(text);
+    alert("Link copied to clipboard!");
+  };
+
+  // Generate QR share link for encrypted files
+  const handleGenerateQRLink = async () => {
+    if (!selectedFile) return;
+
+    if (selectedFile.encrypted) {
+      // For encrypted files, create a shareable link
+      const password = prompt("Enter a password for this QR code share link (recipients will need this password):");
+      if (!password) {
+        alert("Password is required for encrypted file QR codes");
+        return;
+      }
+
+      try {
+        const linkId = `qr-${account}-${selectedFile.id}-${Date.now()}`;
+        const signer = contract.connect(provider.getSigner());
+
+        const tx = await signer.createShareableLink(
+          selectedFile.id,
+          linkId,
+          password,
+          168, // 1 week default for QR codes
+          2 // DOWNLOAD permission
+        );
+        await tx.wait();
+
+        const shareUrl = `${window.location.origin}/share/${linkId}`;
+        setQrShareLink(shareUrl);
+        setShareAccessMode("link");
+        alert("QR code link created! Recipients will need to enter the password you just set.");
+      } catch (error) {
+        console.error("Create QR link error:", error);
+        alert("Failed to create QR share link: " + (error.message || "Unknown error"));
+      }
+    } else {
+      // For non-encrypted files, use direct IPFS link
+      setQrShareLink(selectedFile.url);
+      setShareAccessMode("direct");
+    }
+  };
+
   // Filter and search files
   const getFilteredFiles = () => {
     let filtered = activeTab === "myfiles" ? files : sharedFiles;
@@ -453,6 +663,186 @@ function App() {
     return filtered;
   };
 
+  // Share Access View
+  if (currentView === "shareAccess") {
+    return (
+      <div className="landing-container">
+        <div style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "20px"
+        }}>
+          <div className="modal-content" style={{ maxWidth: "500px", position: "relative" }}>
+            <div className="modal-header">
+              <h3 className="modal-title">🔗 Shared File Access</h3>
+            </div>
+
+            {shareLinkData ? (
+              <div className="modal-body">
+                <div style={{
+                  background: "#f3f4f6",
+                  borderRadius: "12px",
+                  padding: "20px",
+                  marginBottom: "20px"
+                }}>
+                  <div style={{ marginBottom: "12px" }}>
+                    <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "600" }}>
+                      IPFS Hash:
+                    </span>
+                    <p style={{
+                      fontSize: "11px",
+                      color: "#374151",
+                      fontFamily: "monospace",
+                      wordBreak: "break-all",
+                      marginTop: "4px"
+                    }}>
+                      {shareLinkData.ipfsHash.replace(/^ipfs:\/\//, "")}
+                    </p>
+                  </div>
+
+                  <div style={{ marginBottom: "12px" }}>
+                    <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "600" }}>
+                      Owner:
+                    </span>
+                    <p style={{
+                      fontSize: "11px",
+                      color: "#374151",
+                      fontFamily: "monospace",
+                      marginTop: "4px"
+                    }}>
+                      {shareLinkData.owner.slice(0, 6)}...{shareLinkData.owner.slice(-4)}
+                    </p>
+                  </div>
+
+                  <div style={{ marginBottom: "12px" }}>
+                    <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "600" }}>
+                      Expires:
+                    </span>
+                    <p style={{ fontSize: "12px", color: "#374151", marginTop: "4px" }}>
+                      {new Date(shareLinkData.expirationTime * 1000).toLocaleString()}
+                    </p>
+                  </div>
+
+                  <div>
+                    <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "600" }}>
+                      Permission:
+                    </span>
+                    <p style={{ fontSize: "12px", color: "#374151", marginTop: "4px" }}>
+                      {shareLinkData.permission === 1 ? "👁️ View Only" :
+                       shareLinkData.permission === 2 ? "⬇️ Download" :
+                       shareLinkData.permission === 3 ? "✏️ Edit" : "None"}
+                    </p>
+                  </div>
+                </div>
+
+                {shareLinkData.password && shareLinkData.password !== "" && (
+                  <div style={{ marginBottom: "20px" }}>
+                    <label style={{
+                      display: "block",
+                      marginBottom: "8px",
+                      fontWeight: "600",
+                      fontSize: "14px",
+                      color: "#374151"
+                    }}>
+                      🔑 Enter Password
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="Password required"
+                      value={sharePasswordInput}
+                      onChange={(e) => setSharePasswordInput(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        borderRadius: "8px",
+                        border: "2px solid #e5e7eb",
+                        fontSize: "14px",
+                        outline: "none"
+                      }}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          handleShareLinkAccess();
+                        }
+                      }}
+                    />
+                  </div>
+                )}
+
+                {!shareLinkData.isActive && (
+                  <div style={{
+                    background: "#fee2e2",
+                    border: "1px solid #ef4444",
+                    borderRadius: "8px",
+                    padding: "12px",
+                    marginBottom: "20px"
+                  }}>
+                    <p style={{ fontSize: "13px", color: "#991b1b" }}>
+                      ⚠️ This share link has been revoked by the owner.
+                    </p>
+                  </div>
+                )}
+
+                {shareLinkData.isActive && Math.floor(Date.now() / 1000) > shareLinkData.expirationTime && (
+                  <div style={{
+                    background: "#fee2e2",
+                    border: "1px solid #ef4444",
+                    borderRadius: "8px",
+                    padding: "12px",
+                    marginBottom: "20px"
+                  }}>
+                    <p style={{ fontSize: "13px", color: "#991b1b" }}>
+                      ⚠️ This share link has expired.
+                    </p>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleShareLinkAccess}
+                  disabled={accessingShare || !shareLinkData.isActive || Math.floor(Date.now() / 1000) > shareLinkData.expirationTime}
+                  className="modal-btn primary"
+                  style={{
+                    width: "100%",
+                    padding: "14px",
+                    fontSize: "15px",
+                    fontWeight: "700",
+                    opacity: (accessingShare || !shareLinkData.isActive || Math.floor(Date.now() / 1000) > shareLinkData.expirationTime) ? 0.5 : 1,
+                    cursor: (accessingShare || !shareLinkData.isActive || Math.floor(Date.now() / 1000) > shareLinkData.expirationTime) ? "not-allowed" : "pointer"
+                  }}
+                >
+                  {accessingShare ? "⏳ Downloading..." : "⬇️ Download File"}
+                </button>
+              </div>
+            ) : (
+              <div className="modal-body">
+                <p style={{ textAlign: "center", color: "#6b7280" }}>
+                  Loading share link data...
+                </p>
+              </div>
+            )}
+
+            <div className="modal-footer">
+              <button
+                onClick={() => {
+                  window.location.href = "/";
+                }}
+                className="modal-btn secondary"
+              >
+                ← Back to Home
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Theme Toggle Button */}
+        <button onClick={toggleTheme} className="theme-toggle" aria-label="Toggle theme">
+          {darkMode ? '☀️' : '🌙'}
+        </button>
+      </div>
+    );
+  }
+
   if (currentView === "landing") {
     return (
       <div className="landing-container">
@@ -472,21 +862,20 @@ function App() {
         {/* Hero Section */}
         <section className="hero-section">
           <div className="hero-content">
-            <div className="hero-badge">🚀 Web3 Storage Platform</div>
+            <div className="hero-badge">✨ Powered by IPFS & Ethereum</div>
             <h1 className="hero-title">
-              Your Files, Your Rules.
-              <span className="gradient-text"> Forever.</span>
+              Decentralized Storage,
+              <span className="gradient-text"> Redefined</span>
             </h1>
             <p className="hero-description">
-              Store files on IPFS with blockchain-powered access control. 
-              Decentralized, secure, and censorship-resistant storage for the modern web.
+              Upload, encrypt, and share files on IPFS with military-grade encryption and blockchain-enforced access control. Your data, truly yours.
             </p>
             <div className="hero-buttons">
               <button onClick={connectMetaMask} className="primary-btn">
-                Get Started Free →
+                Launch App →
               </button>
               <button className="secondary-btn">
-                Watch Demo
+                Learn More
               </button>
             </div>
             <div className="hero-stats">
@@ -505,17 +894,15 @@ function App() {
             </div>
           </div>
           <div className="hero-visual">
-            <div className="floating-card card-1">
-              <div className="card-icon">📁</div>
-              <div className="card-text">Decentralized Storage</div>
-            </div>
-            <div className="floating-card card-2">
-              <div className="card-icon">🔒</div>
-              <div className="card-text">Blockchain Security</div>
-            </div>
-            <div className="floating-card card-3">
-              <div className="card-icon">⚡</div>
-              <div className="card-text">Lightning Fast</div>
+            <div className="floating-card">
+              <span className="card-icon">🔐</span>
+              <h3 className="card-title">Complete Privacy</h3>
+              <ul className="card-features">
+                <li>AES-256 Encryption</li>
+                <li>Zero-Knowledge Storage</li>
+                <li>Blockchain Access Control</li>
+                <li>Shareable QR Codes</li>
+              </ul>
             </div>
           </div>
         </section>
@@ -523,39 +910,40 @@ function App() {
         {/* Features Section */}
         <section className="features-section">
           <div className="section-header">
-            <h2 className="section-title">Why Choose DecentraVault?</h2>
-            <p className="section-subtitle">Built on cutting-edge blockchain technology</p>
+            <span className="section-badge">🎯 Features</span>
+            <h2 className="section-title">Everything You Need</h2>
+            <p className="section-description">Built with cutting-edge Web3 technology for maximum security and privacy</p>
           </div>
           <div className="features-grid">
             <div className="feature-card">
               <div className="feature-icon">🌐</div>
-              <h3 className="feature-title">IPFS Storage</h3>
-              <p className="feature-desc">Your files are stored on InterPlanetary File System, distributed across thousands of nodes worldwide.</p>
-            </div>
-            <div className="feature-card">
-              <div className="feature-icon">⛓️</div>
-              <h3 className="feature-title">Blockchain Access</h3>
-              <p className="feature-desc">Smart contracts manage permissions. Only you decide who can access your files.</p>
+              <h3 className="feature-title">IPFS Powered</h3>
+              <p className="feature-description">Immutable storage distributed across thousands of nodes. Your files are permanent and always accessible.</p>
             </div>
             <div className="feature-card">
               <div className="feature-icon">🔐</div>
-              <h3 className="feature-title">End-to-End Encryption</h3>
-              <p className="feature-desc">Files encrypted before upload. Your private keys never leave your device.</p>
+              <h3 className="feature-title">AES-256 Encryption</h3>
+              <p className="feature-description">Military-grade encryption before upload. Optional password protection for maximum privacy.</p>
             </div>
             <div className="feature-card">
-              <div className="feature-icon">💎</div>
-              <h3 className="feature-title">NFT Support</h3>
-              <p className="feature-desc">Mint your files as NFTs. Sell, trade, or showcase your digital assets.</p>
+              <div className="feature-icon">🔗</div>
+              <h3 className="feature-title">Smart Sharing</h3>
+              <p className="feature-description">Generate time-limited shareable links with QR codes. Set view, download, or edit permissions.</p>
             </div>
             <div className="feature-card">
-              <div className="feature-icon">🚫</div>
-              <h3 className="feature-title">Censorship Resistant</h3>
-              <p className="feature-desc">No single point of failure. Your content can't be taken down.</p>
+              <div className="feature-icon">⛓️</div>
+              <h3 className="feature-title">Blockchain Security</h3>
+              <p className="feature-description">Smart contracts on Ethereum enforce access control. Fully auditable and tamper-proof.</p>
             </div>
             <div className="feature-card">
-              <div className="feature-icon">⚡</div>
-              <h3 className="feature-title">Fast & Reliable</h3>
-              <p className="feature-desc">Global CDN ensures quick access from anywhere in the world.</p>
+              <div className="feature-icon">📱</div>
+              <h3 className="feature-title">QR Code Sharing</h3>
+              <p className="feature-description">Instant mobile access via QR codes. Perfect for quick file sharing on the go.</p>
+            </div>
+            <div className="feature-card">
+              <div className="feature-icon">🗑️</div>
+              <h3 className="feature-title">Full Control</h3>
+              <p className="feature-description">Delete files anytime, manage individual file permissions, and track all access activity.</p>
             </div>
           </div>
         </section>
@@ -640,6 +1028,11 @@ function App() {
             <p>© Drive3.0. Built with ❤️ on the blockchain.</p>
           </div>
         </footer>
+
+        {/* Theme Toggle Button */}
+        <button onClick={toggleTheme} className="theme-toggle" aria-label="Toggle theme">
+          {darkMode ? '☀️' : '🌙'}
+        </button>
       </div>
     );
   }
@@ -925,6 +1318,67 @@ function App() {
                         </>
                       )}
                     </div>
+
+                    {/* Additional Actions - Only for My Files */}
+                    {activeTab === "myfiles" && (
+                      <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
+                        <button
+                          onClick={() => {
+                            setSelectedFile(file);
+                            setShareModalOpen(true);
+                          }}
+                          style={{
+                            flex: 1,
+                            padding: "8px",
+                            background: "#10b981",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "6px",
+                            fontSize: "12px",
+                            cursor: "pointer",
+                            fontWeight: "600"
+                          }}
+                        >
+                          🔗 Share
+                        </button>
+                        <button
+                          onClick={() => {
+                            setSelectedFile(file);
+                            setQrModalOpen(true);
+                          }}
+                          style={{
+                            flex: 1,
+                            padding: "8px",
+                            background: "#8b5cf6",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "6px",
+                            fontSize: "12px",
+                            cursor: "pointer",
+                            fontWeight: "600"
+                          }}
+                        >
+                          📱 QR
+                        </button>
+                        <button
+                          onClick={() => handleDeleteFile(file.id)}
+                          style={{
+                            flex: 1,
+                            padding: "8px",
+                            background: "#ef4444",
+                            color: "white",
+                            border: "none",
+                            borderRadius: "6px",
+                            fontSize: "12px",
+                            cursor: "pointer",
+                            fontWeight: "600"
+                          }}
+                        >
+                          🗑️ Delete
+                        </button>
+                      </div>
+                    )}
+
                     <div style={{ marginTop: "8px", fontSize: "10px", color: "#999", fontFamily: "monospace" }}>
                       CID: {file.hash.slice(0, 8)}...{file.hash.slice(-6)}
                     </div>
@@ -1020,6 +1474,278 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* Share Link Modal */}
+      {shareModalOpen && selectedFile && (
+        <div className="modal-overlay" onClick={() => setShareModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "500px" }}>
+            <div className="modal-header">
+              <h3 className="modal-title">Create Shareable Link</h3>
+              <button onClick={() => setShareModalOpen(false)} className="modal-close">✕</button>
+            </div>
+            <div className="modal-body">
+              <div style={{ marginBottom: "15px" }}>
+                <label style={{ display: "block", marginBottom: "5px", fontWeight: "600", fontSize: "14px" }}>
+                  File: {selectedFile.name}
+                </label>
+              </div>
+
+              <div style={{ marginBottom: "15px" }}>
+                <label style={{ display: "block", marginBottom: "5px", fontWeight: "600", fontSize: "14px" }}>
+                  Link Password (Optional)
+                </label>
+                <input
+                  type="password"
+                  placeholder="Enter password for link protection"
+                  value={shareLinkPassword}
+                  onChange={(e) => setShareLinkPassword(e.target.value)}
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "6px",
+                    border: "1px solid #ddd",
+                    fontSize: "14px"
+                  }}
+                />
+              </div>
+
+              <div style={{ marginBottom: "15px" }}>
+                <label style={{ display: "block", marginBottom: "5px", fontWeight: "600", fontSize: "14px" }}>
+                  Expiration (Hours)
+                </label>
+                <select
+                  value={shareLinkHours}
+                  onChange={(e) => setShareLinkHours(Number(e.target.value))}
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "6px",
+                    border: "1px solid #ddd",
+                    fontSize: "14px",
+                    cursor: "pointer"
+                  }}
+                >
+                  <option value={1}>1 Hour</option>
+                  <option value={6}>6 Hours</option>
+                  <option value={12}>12 Hours</option>
+                  <option value={24}>24 Hours</option>
+                  <option value={48}>48 Hours</option>
+                  <option value={168}>1 Week</option>
+                  <option value={720}>30 Days</option>
+                </select>
+              </div>
+
+              <div style={{ marginBottom: "15px" }}>
+                <label style={{ display: "block", marginBottom: "5px", fontWeight: "600", fontSize: "14px" }}>
+                  Permission Level
+                </label>
+                <select
+                  value={sharePermission}
+                  onChange={(e) => setSharePermission(Number(e.target.value))}
+                  style={{
+                    width: "100%",
+                    padding: "10px",
+                    borderRadius: "6px",
+                    border: "1px solid #ddd",
+                    fontSize: "14px",
+                    cursor: "pointer"
+                  }}
+                >
+                  <option value={1}>👁️ View Only</option>
+                  <option value={2}>⬇️ Download</option>
+                  <option value={3}>✏️ Edit</option>
+                </select>
+              </div>
+
+              {generatedShareLink && (
+                <div style={{
+                  padding: "15px",
+                  background: "#f0fdf4",
+                  borderRadius: "8px",
+                  marginBottom: "15px"
+                }}>
+                  <label style={{ display: "block", marginBottom: "8px", fontWeight: "600", fontSize: "14px", color: "#10b981" }}>
+                    ✅ Link Generated!
+                  </label>
+                  <div style={{ display: "flex", gap: "10px" }}>
+                    <input
+                      type="text"
+                      value={generatedShareLink}
+                      readOnly
+                      style={{
+                        flex: 1,
+                        padding: "8px",
+                        borderRadius: "6px",
+                        border: "1px solid #10b981",
+                        fontSize: "12px",
+                        fontFamily: "monospace"
+                      }}
+                    />
+                    <button
+                      onClick={() => copyToClipboard(generatedShareLink)}
+                      style={{
+                        padding: "8px 15px",
+                        background: "#10b981",
+                        color: "white",
+                        border: "none",
+                        borderRadius: "6px",
+                        cursor: "pointer",
+                        fontWeight: "600"
+                      }}
+                    >
+                      📋 Copy
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button
+                onClick={handleCreateShareLink}
+                className="modal-btn primary"
+                style={{ marginRight: "10px" }}
+              >
+                Generate Link
+              </button>
+              <button onClick={() => {
+                setShareModalOpen(false);
+                setGeneratedShareLink("");
+                setShareLinkPassword("");
+              }} className="modal-btn secondary">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* QR Code Modal */}
+      {qrModalOpen && selectedFile && (
+        <div className="modal-overlay" onClick={() => {
+          setQrModalOpen(false);
+          setQrShareLink("");
+          setShareAccessMode("direct");
+        }}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: "450px", textAlign: "center" }}>
+            <div className="modal-header">
+              <h3 className="modal-title">
+                {selectedFile.encrypted ? "🔒 Encrypted File QR Code" : "QR Code"}
+              </h3>
+              <button onClick={() => {
+                setQrModalOpen(false);
+                setQrShareLink("");
+                setShareAccessMode("direct");
+              }} className="modal-close">✕</button>
+            </div>
+            <div className="modal-body">
+              <p style={{ marginBottom: "20px", fontSize: "14px", color: "#666" }}>
+                Scan to access: <strong>{selectedFile.name}</strong>
+              </p>
+
+              {selectedFile.encrypted && !qrShareLink && (
+                <div style={{
+                  background: "#fef3c7",
+                  border: "1px solid #fbbf24",
+                  borderRadius: "8px",
+                  padding: "15px",
+                  marginBottom: "20px"
+                }}>
+                  <p style={{ fontSize: "13px", color: "#92400e", marginBottom: "10px" }}>
+                    ⚠️ This file is encrypted. Generate a password-protected share link for mobile access.
+                  </p>
+                  <button
+                    onClick={handleGenerateQRLink}
+                    style={{
+                      width: "100%",
+                      padding: "10px 20px",
+                      background: "#fbbf24",
+                      color: "#92400e",
+                      border: "none",
+                      borderRadius: "6px",
+                      cursor: "pointer",
+                      fontWeight: "600",
+                      fontSize: "14px"
+                    }}
+                  >
+                    🔑 Generate Protected Link
+                  </button>
+                </div>
+              )}
+
+              {(qrShareLink || !selectedFile.encrypted) && (
+                <>
+                  <div style={{
+                    display: "flex",
+                    justifyContent: "center",
+                    padding: "20px",
+                    background: "white",
+                    borderRadius: "12px",
+                    border: "2px solid #e5e7eb"
+                  }}>
+                    <QRCodeSVG
+                      value={qrShareLink || selectedFile.url}
+                      size={256}
+                      level="H"
+                      includeMargin={true}
+                    />
+                  </div>
+
+                  {selectedFile.encrypted && qrShareLink ? (
+                    <div style={{
+                      marginTop: "15px",
+                      padding: "12px",
+                      background: "#dcfce7",
+                      borderRadius: "8px",
+                      border: "1px solid #10b981"
+                    }}>
+                      <p style={{ fontSize: "12px", color: "#065f46", marginBottom: "5px" }}>
+                        ✅ Password-Protected Share Link
+                      </p>
+                      <p style={{ fontSize: "11px", color: "#047857" }}>
+                        Expires in 1 week • Recipients need password
+                      </p>
+                    </div>
+                  ) : (
+                    <p style={{ marginTop: "15px", fontSize: "12px", color: "#999" }}>
+                      Direct IPFS Link
+                    </p>
+                  )}
+
+                  <button
+                    onClick={() => copyToClipboard(qrShareLink || selectedFile.url)}
+                    style={{
+                      marginTop: "15px",
+                      padding: "10px 20px",
+                      background: "#6366f1",
+                      color: "white",
+                      border: "none",
+                      borderRadius: "8px",
+                      cursor: "pointer",
+                      fontWeight: "600"
+                    }}
+                  >
+                    📋 Copy Link
+                  </button>
+                </>
+              )}
+            </div>
+            <div className="modal-footer">
+              <button onClick={() => {
+                setQrModalOpen(false);
+                setQrShareLink("");
+                setShareAccessMode("direct");
+              }} className="modal-btn secondary">
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Theme Toggle Button */}
+      <button onClick={toggleTheme} className="theme-toggle" aria-label="Toggle theme">
+        {darkMode ? '☀️' : '🌙'}
+      </button>
     </div>
   );
 }

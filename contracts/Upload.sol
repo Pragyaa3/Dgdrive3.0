@@ -17,11 +17,27 @@ contract Upload {
         address user;
         bool access;
     }
-    
+
     struct SharedFile {
         address owner;
         string ipfsHash;
         uint256 sharedTime;
+    }
+
+    enum Permission { NONE, VIEW, DOWNLOAD, EDIT }
+
+    struct ShareableLink {
+        string ipfsHash;
+        string password;
+        uint256 expirationTime;
+        bool isActive;
+        address owner;
+        Permission permission;
+    }
+
+    struct FilePermission {
+        address user;
+        Permission permission;
     }
     
     // User files mapping
@@ -37,12 +53,20 @@ contract Upload {
     
     // File versioning
     mapping(address => mapping(string => uint256)) private fileVersions;
-    
+
+    // Shareable links
+    mapping(string => ShareableLink) private shareableLinks;
+
+    // Individual file permissions
+    mapping(address => mapping(uint256 => FilePermission[])) private filePermissions;
+
     // Events
     event FileUploaded(address indexed user, string ipfsHash, string fileName, uint256 timestamp);
     event FileShared(address indexed from, address indexed to, string ipfsHash, uint256 timestamp);
     event AccessRevoked(address indexed from, address indexed to, uint256 timestamp);
     event FileDeleted(address indexed user, uint256 fileIndex, uint256 timestamp);
+    event ShareableLinkCreated(address indexed owner, string linkId, uint256 expirationTime);
+    event FilePermissionGranted(address indexed owner, uint256 fileIndex, address indexed user, Permission permission);
     
     // Upload file with metadata
     function addFile(
@@ -196,14 +220,97 @@ contract Upload {
     ) {
         FileMetadata[] memory files = userFiles[_user];
         totalFiles = files.length;
-        
+
         for (uint i = 0; i < files.length; i++) {
             totalSize += files[i].fileSize;
             if (files[i].isEncrypted) {
                 encryptedFiles++;
             }
         }
-        
+
         return (totalFiles, totalSize, encryptedFiles);
+    }
+
+    // Create shareable link with expiration
+    function createShareableLink(
+        uint256 _fileIndex,
+        string memory _linkId,
+        string memory _password,
+        uint256 _expirationHours,
+        Permission _permission
+    ) external {
+        require(_fileIndex < userFiles[msg.sender].length, "Invalid file index");
+
+        FileMetadata memory file = userFiles[msg.sender][_fileIndex];
+        uint256 expirationTime = block.timestamp + (_expirationHours * 1 hours);
+
+        shareableLinks[_linkId] = ShareableLink({
+            ipfsHash: file.ipfsHash,
+            password: _password,
+            expirationTime: expirationTime,
+            isActive: true,
+            owner: msg.sender,
+            permission: _permission
+        });
+
+        emit ShareableLinkCreated(msg.sender, _linkId, expirationTime);
+    }
+
+    // Get shareable link details
+    function getShareableLink(string memory _linkId) external view returns (ShareableLink memory) {
+        return shareableLinks[_linkId];
+    }
+
+    // Revoke shareable link
+    function revokeShareableLink(string memory _linkId) external {
+        require(shareableLinks[_linkId].owner == msg.sender, "Not the owner");
+        shareableLinks[_linkId].isActive = false;
+    }
+
+    // Grant individual file permission
+    function grantFilePermission(
+        uint256 _fileIndex,
+        address _user,
+        Permission _permission
+    ) external {
+        require(_fileIndex < userFiles[msg.sender].length, "Invalid file index");
+        require(_user != msg.sender, "Cannot grant permission to yourself");
+
+        filePermissions[msg.sender][_fileIndex].push(FilePermission({
+            user: _user,
+            permission: _permission
+        }));
+
+        emit FilePermissionGranted(msg.sender, _fileIndex, _user, _permission);
+    }
+
+    // Revoke individual file permission
+    function revokeFilePermission(uint256 _fileIndex, address _user) external {
+        require(_fileIndex < userFiles[msg.sender].length, "Invalid file index");
+
+        FilePermission[] storage permissions = filePermissions[msg.sender][_fileIndex];
+        for (uint i = 0; i < permissions.length; i++) {
+            if (permissions[i].user == _user) {
+                permissions[i] = permissions[permissions.length - 1];
+                permissions.pop();
+                break;
+            }
+        }
+    }
+
+    // Get file permissions
+    function getFilePermissions(address _owner, uint256 _fileIndex) external view returns (FilePermission[] memory) {
+        return filePermissions[_owner][_fileIndex];
+    }
+
+    // Check if user has permission for specific file
+    function hasFilePermission(address _owner, uint256 _fileIndex, address _user) external view returns (Permission) {
+        FilePermission[] memory permissions = filePermissions[_owner][_fileIndex];
+        for (uint i = 0; i < permissions.length; i++) {
+            if (permissions[i].user == _user) {
+                return permissions[i].permission;
+            }
+        }
+        return Permission.NONE;
     }
 }
