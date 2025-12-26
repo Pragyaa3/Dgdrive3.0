@@ -34,6 +34,8 @@ function App() {
   const [shareLinkData, setShareLinkData] = useState(null);
   const [sharePasswordInput, setSharePasswordInput] = useState("");
   const [accessingShare, setAccessingShare] = useState(false);
+  const [fileEncryptionPassword, setFileEncryptionPassword] = useState("");
+  const [fileMetadata, setFileMetadata] = useState(null);
 
  const connectMetaMask = async () => {
   // Ensure MetaMask exists
@@ -463,13 +465,14 @@ function App() {
 
         // Connect to contract without MetaMask (read-only)
         try {
-          const provider = new ethers.providers.JsonRpcProvider("https://rpc.sepolia.org");
+          // Use Infura public endpoint which has CORS enabled
+          const provider = new ethers.providers.JsonRpcProvider("https://sepolia.infura.io/v3/9aa3d95b3bc440fa88ea12eaa4456161");
           const contractAddress = process.env.REACT_APP_CONTRACT_ADDRESS;
           const contract = new ethers.Contract(contractAddress, Upload.abi, provider);
 
           // Get share link data
           const linkData = await contract.getShareableLink(linkId);
-          setShareLinkData({
+          const linkInfo = {
             linkId,
             ipfsHash: linkData.ipfsHash,
             password: linkData.password,
@@ -477,7 +480,32 @@ function App() {
             isActive: linkData.isActive,
             owner: linkData.owner,
             permission: Number(linkData.permission)
-          });
+          };
+          setShareLinkData(linkInfo);
+
+          // Fetch file metadata from Pinata to check if it's encrypted
+          try {
+            const ipfsHash = linkData.ipfsHash.replace(/^ipfs:\/\//, "");
+            const metadataUrl = `https://api.pinata.cloud/data/pinList?hashContains=${ipfsHash}&status=pinned`;
+            const metadataResponse = await fetch(metadataUrl, {
+              headers: {
+                pinata_api_key: process.env.REACT_APP_PINATA_API_KEY,
+                pinata_secret_api_key: process.env.REACT_APP_PINATA_SECRET
+              }
+            });
+            const metadataData = await metadataResponse.json();
+
+            if (metadataData.rows && metadataData.rows.length > 0) {
+              const metadata = metadataData.rows[0].metadata;
+              setFileMetadata({
+                name: metadata.name || "shared-file",
+                encrypted: metadata.keyvalues?.encrypted === "true"
+              });
+            }
+          } catch (metaError) {
+            console.log("Could not fetch file metadata, assuming not encrypted:", metaError);
+            setFileMetadata({ encrypted: false });
+          }
         } catch (error) {
           console.error("Error loading share link:", error);
           alert("Failed to load share link. It may have expired or been revoked.");
@@ -505,10 +533,18 @@ function App() {
       return;
     }
 
-    // Check password if set
+    // Check share link password if set
     if (shareLinkData.password && shareLinkData.password !== "") {
       if (sharePasswordInput !== shareLinkData.password) {
-        alert("Incorrect password. Please try again.");
+        alert("Incorrect share link password. Please try again.");
+        return;
+      }
+    }
+
+    // Check if file is encrypted and password is required
+    if (fileMetadata?.encrypted) {
+      if (!fileEncryptionPassword) {
+        alert("🔒 This file is encrypted. Please enter the file encryption password.");
         return;
       }
     }
@@ -519,10 +555,26 @@ function App() {
       // Fetch the file from IPFS
       const ipfsUrl = `https://gateway.pinata.cloud/ipfs/${shareLinkData.ipfsHash.replace(/^ipfs:\/\//, "")}`;
       const response = await fetch(ipfsUrl);
-      const blob = await response.blob();
+      let blob = await response.blob();
 
-      // Get filename from share link or use default
-      const filename = `shared-file-${shareLinkData.linkId.slice(0, 8)}`;
+      // Get filename from metadata or use default
+      const filename = fileMetadata?.name || `shared-file-${shareLinkData.linkId.slice(0, 8)}`;
+
+      // If file is encrypted, decrypt it
+      if (fileMetadata?.encrypted) {
+        try {
+          // Decrypt the blob
+          blob = await decryptFile(blob, fileEncryptionPassword, filename, blob.type);
+          alert("✅ File decrypted and downloaded successfully!");
+        } catch (decryptError) {
+          console.error("Decryption error:", decryptError);
+          alert("❌ Decryption failed: " + decryptError.message + "\n\nPlease check your file encryption password and try again.");
+          setAccessingShare(false);
+          return;
+        }
+      } else {
+        alert("✅ File downloaded successfully!");
+      }
 
       // Create download
       const url = URL.createObjectURL(blob);
@@ -534,10 +586,9 @@ function App() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
 
-      alert("✅ File downloaded successfully!");
     } catch (error) {
       console.error("Download error:", error);
-      alert("Failed to download file: " + error.message);
+      alert("❌ Failed to download file: " + error.message);
     } finally {
       setAccessingShare(false);
     }
@@ -691,6 +742,35 @@ function App() {
                   padding: "20px",
                   marginBottom: "20px"
                 }}>
+                  {fileMetadata?.name && (
+                    <div style={{ marginBottom: "12px" }}>
+                      <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "600" }}>
+                        File Name:
+                      </span>
+                      <p style={{
+                        fontSize: "13px",
+                        color: "#374151",
+                        fontWeight: "600",
+                        marginTop: "4px"
+                      }}>
+                        {fileMetadata.name}
+                        {fileMetadata.encrypted && (
+                          <span style={{
+                            marginLeft: "8px",
+                            background: "#fbbf24",
+                            color: "white",
+                            padding: "2px 8px",
+                            borderRadius: "4px",
+                            fontSize: "11px",
+                            fontWeight: "600"
+                          }}>
+                            🔒 Encrypted
+                          </span>
+                        )}
+                      </p>
+                    </div>
+                  )}
+
                   <div style={{ marginBottom: "12px" }}>
                     <span style={{ fontSize: "12px", color: "#6b7280", fontWeight: "600" }}>
                       IPFS Hash:
@@ -750,11 +830,11 @@ function App() {
                       fontSize: "14px",
                       color: "#374151"
                     }}>
-                      🔑 Enter Password
+                      🔑 Share Link Password
                     </label>
                     <input
                       type="password"
-                      placeholder="Password required"
+                      placeholder="Enter share link password"
                       value={sharePasswordInput}
                       onChange={(e) => setSharePasswordInput(e.target.value)}
                       style={{
@@ -771,6 +851,47 @@ function App() {
                         }
                       }}
                     />
+                  </div>
+                )}
+
+                {fileMetadata?.encrypted && (
+                  <div style={{ marginBottom: "20px" }}>
+                    <label style={{
+                      display: "block",
+                      marginBottom: "8px",
+                      fontWeight: "600",
+                      fontSize: "14px",
+                      color: "#374151"
+                    }}>
+                      🔒 File Encryption Password
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="Enter file encryption password"
+                      value={fileEncryptionPassword}
+                      onChange={(e) => setFileEncryptionPassword(e.target.value)}
+                      style={{
+                        width: "100%",
+                        padding: "12px",
+                        borderRadius: "8px",
+                        border: "2px solid #fbbf24",
+                        fontSize: "14px",
+                        outline: "none",
+                        background: "#fef3c7"
+                      }}
+                      onKeyPress={(e) => {
+                        if (e.key === 'Enter') {
+                          handleShareLinkAccess();
+                        }
+                      }}
+                    />
+                    <p style={{
+                      marginTop: "6px",
+                      fontSize: "12px",
+                      color: "#92400e"
+                    }}>
+                      ⚠️ This file is encrypted. You need the encryption password used when uploading.
+                    </p>
                   </div>
                 )}
 
